@@ -1,0 +1,16 @@
+.DS_Store
+**/.DS_Store
+.ipynb_checkpoints/
+**/.ipynb_checkpoints/
+
+# Local Python / notebook artifacts
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Keep the portfolio focused on core projects
+/과제/
+/과제/**
+/과제/
+/과제/**
