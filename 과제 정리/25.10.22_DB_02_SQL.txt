@@ -1,0 +1,92 @@
+실습1 - 병원 데이터 베이스 생성
+CREATE DATABASE hospital_lab ;
+실습2 - 환자 테이블 만들기
+CREATE TABLE patients(
+	patient_id INT auto_increment  primary key,
+	name varchar(50) not null,
+    birth_date date,
+    gender ENUM('M','F') not null,
+    phone varchar(20),
+    email varchar(100),
+    address varchar(200),
+    visit_count int default 0,
+    created_at timestamp default current_timestamp
+);
+실습3 - 의사 테이블 만들기
+create table doctors (
+	doctor_id int auto_increment primary key,
+    name varchar(50) not null,
+    specialty varchar(50) not null,
+    phone varchar(20),
+    email varchar(100),
+    hire_date date
+);
+실습4 - 예약 테이블 만들기
+create table appointments (
+	appointment_id INT AUTO_INCREMENT PRIMARY KEY,
+	patient_id INT NOT NULL,
+    doctor_id INT NOT NULL,
+    FOREIGN KEY (patient_id) REFERENCES patients(patient_id),
+    FOREIGN KEY (doctor_id) REFERENCES doctors(doctor_id),
+    visit_date DATE NOT NULL,
+    note TEXT,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    status ENUM('Scheduled', 'Completed','Cancelled') DEFAULT 'Scheduled'
+);
+실습5 - 데이터 삽입
+1.환자
+INSERT INTO patients
+	(name, birth_date, gender, phone, email, address)
+VALUES
+	('변예윤', '1997-01-21', 'F', '010-1234-1234', 'byy@mail.com','경기도 부천시'),
+	('윤희주', '1998-10-19', 'F', '010-1234-1234', 'yun@mail.com','서울시 양천구'),
+    ('김민지', '1990-06-13', 'F', '010-1234-1234', 'kim@mail.com','경기도 파주시');
+2.의사
+INSERT INTO doctors
+	(name, specialty, phone, email, hire_date)
+VALUES
+	('박지훈', 'GS', '010-1234-1234', 'ji@mail.com','2018-03-12'),
+	('최가은', 'DR', '010-1234-1234', 'gosilver@mail.com','2020-07-01'),
+    ('이현우', 'OS', '010-1234-1234', 'lee@mail.com','2019-11-05');
+3.예약
+INSERT INTO appointments
+	(patient_id, doctor_id, visit_date, status, note, created_at)
+VALUES
+	('1', '1', '2025-10-22', 'Scheduled','맹장 수술 예정으로 입원', NOW()),
+	('2', '2', '2025-10-23', 'Completed','알러지 증상으로 내원',NOW()),
+    ('3', '3', '2025-10-24', 'Scheduled','손목 통증으로 인해 검사 예정',NOW());
+실습6 - 데이터 조회
+1. 모든환자 데이터 조회
+SELECT * FROM hospital_lab.patients;
+2. 여성환자만 조회
+SELECT * FROM hospital_lab.patients
+	WHERE gender = 'F';
+3. 예약일 순서대로 내림차순 정렬
+SELECT * 
+FROM hospital_lab.appointments
+    ORDER BY visit_date ASC;
+실습7 - 데이터 수정
+1.특정환자 번호 변경
+UPDATE patients
+SET phone = '010-9999-8888'
+	WHERE patient_id = 1;
+2. 모든 과거 예약상태 변경
+UPDATE appointments
+SET status = 'Completed';
+실습8 - 데이터 삭제
+1. 예약번호 3번 삭제
+DELETE FROM appointments
+	WHERE patient_id = 3;
+실습9 - 조건 검색
+1. 특정 성씨로 시작하는 환자
+SELECT * 
+FROM hospital.patients
+    WHERE name LIKE '변%';
+2.특정 날짜 사이사이 예약
+SELECT * 
+FROM appointments
+    WHERE visit_date BETWEEN '2025-10-20 00:00:00' AND '2025-10-25 23:59:59'
+3.특정 단어가 들어간 메모 조회
+SELECT * 
+FROM appointments
+    WHERE visit_date BETWEEN '2025-10-20 00:00:00' AND '2025-10-25 23:59:59'
