@@ -8,9 +8,3 @@ __pycache__/
 *.pyc
 *.pyo
 *.pyd
-
-# Keep the portfolio focused on core projects
-/과제/
-/과제/**
-/과제/
-/과제/**
