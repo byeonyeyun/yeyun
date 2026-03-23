@@ -1,7 +1,7 @@
 # AI Health Final
 
-AI Health Final은 ADHD 환자/보호자 지원을 위한 백엔드 프로젝트다.  
-`FastAPI + AI Worker + MySQL + Redis + Nginx` 구조로, OCR/가이드/알림 기능을 중심으로 동작하며 챗봇 고도화를 진행 중이다.
+AI Health Final은 ADHD 환자/보호자 지원을 위한 백엔드 프로젝트
+`FastAPI + AI Worker + MySQL + Redis + Nginx` 구조로, OCR/가이드/알림 기능을 중심으로 동작하며 챗봇 고도화를 진행 중 
 
 ## 문서 바로가기
 
@@ -112,8 +112,3 @@ Linux/macOS(스크립트):
 ./scripts/ci/run_test.sh
 ```
 
-## 개발 원칙
-
-- 요구사항 변경 시 `docs/REQUIREMENTS_DEFINITION.md`를 먼저 갱신한다.
-- API 계약 영향이 있으면 `docs/API_SPECIFICATION.md`를 함께 갱신한다.
-- 구현 PR에는 관련 REQ ID를 명시한다. 예: `REQ-075`, `REQ-083`
