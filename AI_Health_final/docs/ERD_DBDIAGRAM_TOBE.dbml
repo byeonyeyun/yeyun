@@ -1,0 +1,446 @@
+Project AI_Health_Core_Baseline {
+  database_type: "MySQL"
+  Note: 'Simplified ERD for first web service project (2026-03-19). Aligned with latest requirements and API spreadsheets. Focuses on minimum tables needed to implement current API contract (46 endpoints).'
+}
+
+// ----------------------------------------------------------------------
+// Scope and simplification policy
+// ----------------------------------------------------------------------
+// Included: only core tables directly mapped to API_명세서.xlsx endpoints.
+// Deferred (intentionally excluded):
+// - knowledge_sources / knowledge_documents / knowledge_chunks / vector_index_mappings
+// - prompt_versions / model_versions / inference_audits / external_api_call_logs
+// - chat_message_references / chat_guardrail_events / ocr_results / ocr_medications
+// Note: guide_results IS included (separate 1:1 table with guide_jobs) to match actual ORM.
+// Note: psych_drugs, user_notification_settings, daily_diaries added (2026-03-19) to match actual ORM.
+// Reason: keep first-project schema easy to understand and implement.
+
+// ----------------------------------------------------------------------
+// Enums (minimal)
+// ----------------------------------------------------------------------
+Enum gender_enum {
+  MALE
+  FEMALE
+}
+
+Enum document_type_enum {
+  MEDICAL_RECORD
+  PRESCRIPTION
+  MEDICATION_BAG
+}
+
+Enum async_job_status_enum {
+  QUEUED
+  PROCESSING
+  SUCCEEDED
+  FAILED
+}
+
+Enum chat_session_status_enum {
+  ACTIVE
+  CLOSED
+}
+
+Enum chat_role_enum {
+  USER
+  ASSISTANT
+  SYSTEM
+}
+
+Enum chat_message_status_enum {
+  PENDING
+  STREAMING
+  COMPLETED
+  FAILED
+  CANCELLED
+}
+
+Enum notification_type_enum {
+  SYSTEM
+  HEALTH_ALERT
+  REPORT_READY
+  GUIDE_READY
+  MEDICATION_DDAY
+}
+
+Enum schedule_item_category_enum {
+  MEDICATION
+  MEAL
+  SLEEP
+  EXERCISE
+}
+
+Enum schedule_item_status_enum {
+  PENDING
+  DONE
+  SKIPPED
+}
+
+// ----------------------------------------------------------------------
+// 1) Account and profile
+// ----------------------------------------------------------------------
+Table users {
+  id bigint [pk, increment, not null]
+  email varchar(40) [not null, unique]
+  hashed_password varchar(128) [not null]
+  name varchar(20) [not null]
+  gender gender_enum [not null]
+  birthday date [not null]
+  phone_number varchar(11) [not null, unique]
+  is_active boolean [not null, default: true]
+  last_login datetime(6)
+  created_at datetime(6) [not null, default: `CURRENT_TIMESTAMP(6)`]
+  updated_at datetime(6) [not null, default: `CURRENT_TIMESTAMP(6)`]
+
+  Note: 'Core account table. Withdrawal uses soft delete (is_active=false) + Redis JTI blacklist for immediate token invalidation (no withdrawn_at/token_version columns in ORM). Supports REQ-024~028.'
+
+  indexes {
+    (email) [name: 'idx_users_email', unique]
+    (phone_number) [name: 'idx_users_phone_number', unique]
+    (is_active) [name: 'idx_users_is_active']
+  }
+}
+
+Table health_profiles {
+  id bigint [pk, increment, not null]
+  user_id bigint [not null, unique]
+  height_cm float [not null]
+  weight_kg float [not null]
+  drug_allergies json [not null, default: '[]']
+  exercise_frequency_per_week int [not null]
+  pc_hours_per_day int [not null]
+  smartphone_hours_per_day int [not null]
+  caffeine_cups_per_day int [not null]
+  smoking int [not null]
+  alcohol_frequency_per_week int [not null]
+  bed_time varchar(5) [not null]
+  wake_time varchar(5) [not null]
+  sleep_latency_minutes int [not null]
+  night_awakenings_per_week int [not null]
+  daytime_sleepiness int [not null]
+  appetite_level int [not null]
+  meal_regular boolean [not null]
+  bmi float [not null]
+  sleep_time_hours float [not null]
+  caffeine_mg int [not null]
+  digital_time_hours int [not null]
+  weekly_refresh_weekday int
+  weekly_refresh_time varchar(5)
+  weekly_adherence_rate float
+  onboarding_completed_at datetime(6)
+  created_at datetime(6) [not null, default: `CURRENT_TIMESTAMP(6)`]
+  updated_at datetime(6) [not null, default: `CURRENT_TIMESTAMP(6)`]
+
+  Note: 'Flattened profile for PUT/GET /users/me/health-profile. Computed fields (bmi, sleep_time_hours, caffeine_mg, digital_time_hours) are calculated server-side. Supports REQ-045~047.'
+
+  indexes {
+    (user_id) [name: 'idx_health_profiles_user_id', unique]
+    (user_id, updated_at) [name: 'idx_health_profiles_user_updated_at']
+  }
+}
+
+// ----------------------------------------------------------------------
+// 2) OCR and medication dictionary
+// ----------------------------------------------------------------------
+Table documents {
+  id bigint [pk, increment, not null]
+  user_id bigint [not null]
+  document_type document_type_enum [not null]
+  file_name varchar(255) [not null]
+  mime_type varchar(100) [not null]
+  file_size bigint [not null]
+  temp_storage_key varchar(500) [not null]
+  uploaded_at datetime(6) [not null, default: `CURRENT_TIMESTAMP(6)`]
+  disposed_at datetime(6)
+
+  Note: 'Upload metadata table for /ocr/documents/upload. Raw file is temporary and must be disposed after OCR completion/failure (REQ-050, REQ-051, REQ-055, REQ-126).'
+
+  indexes {
+    (user_id, uploaded_at) [name: 'idx_documents_user_uploaded_at']
+  }
+}
+
+Table ocr_jobs {
+  id bigint [pk, increment, not null]
+  user_id bigint [not null]
+  document_id bigint [not null]
+  status async_job_status_enum [not null, default: 'QUEUED']
+  retry_count int [not null, default: 0]
+  max_retries int [not null, default: 3]
+  failure_code varchar(50)
+  error_message longtext
+  raw_text longtext
+  text_blocks_json json
+  structured_result json
+  confirmed_result json
+  needs_user_review boolean [not null, default: false]
+  queued_at datetime(6) [not null, default: `CURRENT_TIMESTAMP(6)`]
+  started_at datetime(6)
+  completed_at datetime(6)
+  created_at datetime(6) [not null, default: `CURRENT_TIMESTAMP(6)`]
+  updated_at datetime(6) [not null, default: `CURRENT_TIMESTAMP(6)`]
+
+  Note: 'Unified OCR job+result table for /ocr/jobs, /ocr/jobs/{job_id}, /ocr/jobs/{job_id}/result, /ocr/jobs/{job_id}/confirm. Includes text block coordinates and field confidence policy data (REQ-053~062, REQ-124) without extra child tables.'
+
+  indexes {
+    (user_id, status) [name: 'idx_ocr_jobs_user_status']
+    (document_id, created_at) [name: 'idx_ocr_jobs_document_id']
+    (status, retry_count) [name: 'idx_ocr_jobs_status_retry']
+  }
+}
+
+Table medications {
+  id bigint [pk, increment, not null]
+  drug_code varchar(100) [not null, unique]
+  name_ko varchar(255) [not null]
+  ingredient varchar(255)
+  aliases json
+  is_adhd_target boolean [not null, default: true]
+  is_active boolean [not null, default: true]
+  created_at datetime(6) [not null, default: `CURRENT_TIMESTAMP(6)`]
+  updated_at datetime(6) [not null, default: `CURRENT_TIMESTAMP(6)`]
+
+  Note: 'Medication dictionary used by OCR mapping validation and autocomplete search API (REQ-057, REQ-062).'
+
+  indexes {
+    (name_ko) [name: 'idx_medications_name_ko']
+    (is_active) [name: 'idx_medications_is_active']
+  }
+}
+
+Table psych_drugs {
+  id bigint [pk, increment, not null]
+  ingredient_name varchar(255)
+  product_name varchar(255)
+  side_effects longtext
+  precautions longtext
+  created_at datetime(6) [not null, default: `CURRENT_TIMESTAMP(6)`]
+  updated_at datetime(6) [not null, default: `CURRENT_TIMESTAMP(6)`]
+
+  Note: 'ADHD psychiatry drug database (seed data ~164 rows). Provides side effects and precautions for medication info lookup (REQ-068, REQ-069).'
+
+  indexes {
+    (product_name) [name: 'idx_psych_drugs_product_name']
+    (ingredient_name) [name: 'idx_psych_drugs_ingredient_name']
+  }
+}
+
+// ----------------------------------------------------------------------
+// 3) Guide and analysis
+// ----------------------------------------------------------------------
+Table guide_jobs {
+  id bigint [pk, increment, not null]
+  user_id bigint [not null]
+  ocr_job_id bigint [not null]
+  status async_job_status_enum [not null, default: 'QUEUED']
+  failure_code varchar(50)
+  error_message longtext
+  retry_count int [not null, default: 0]
+  max_retries int [not null, default: 3]
+  queued_at datetime(6) [not null, default: `CURRENT_TIMESTAMP(6)`]
+  started_at datetime(6)
+  completed_at datetime(6)
+  created_at datetime(6) [not null, default: `CURRENT_TIMESTAMP(6)`]
+  updated_at datetime(6) [not null, default: `CURRENT_TIMESTAMP(6)`]
+
+  Note: 'Guide job lifecycle table. Result payload stored in guide_results (1:1). Supports REQ-001~009, REQ-118.'
+
+  indexes {
+    (user_id, status) [name: 'idx_guide_jobs_user_status']
+    (ocr_job_id, created_at) [name: 'idx_guide_jobs_ocr_job_id']
+    (status, retry_count) [name: 'idx_guide_jobs_status_retry']
+  }
+}
+
+Table guide_results {
+  id bigint [pk, increment, not null]
+  job_id bigint [not null, unique]
+  medication_guidance longtext [not null]
+  lifestyle_guidance longtext [not null]
+  risk_level varchar(20) [not null, default: 'MEDIUM']
+  safety_notice longtext [not null]
+  structured_data json [not null]
+  created_at datetime(6) [not null, default: `CURRENT_TIMESTAMP(6)`]
+  updated_at datetime(6) [not null, default: `CURRENT_TIMESTAMP(6)`]
+
+  Note: 'Guide result payload (1:1 with guide_jobs). structured_data holds source_references and adherence_rate_percent. Supports REQ-003~009, REQ-112, REQ-123.'
+
+  indexes {
+    (job_id) [name: 'idx_guide_results_job_id', unique]
+  }
+}
+
+// ----------------------------------------------------------------------
+// 4) Chat
+// ----------------------------------------------------------------------
+Table chat_sessions {
+  id bigint [pk, increment, not null]
+  user_id bigint [not null]
+  title varchar(255)
+  status chat_session_status_enum [not null, default: 'ACTIVE']
+  auto_close_after_minutes smallint [not null, default: 20]
+  last_activity_at datetime(6)
+  deleted_at datetime(6)
+  created_at datetime(6) [not null, default: `CURRENT_TIMESTAMP(6)`]
+  updated_at datetime(6) [not null, default: `CURRENT_TIMESTAMP(6)`]
+
+  Note: 'Chat session aggregate for create/listen/send/stream/delete lifecycle. deleted_at is used to hide deleted sessions from user queries (REQ-029~044).'
+
+  indexes {
+    (user_id, status) [name: 'idx_chat_sessions_user_status']
+    (user_id, deleted_at) [name: 'idx_chat_sessions_user_deleted_at']
+  }
+}
+
+Table chat_messages {
+  id bigint [pk, increment, not null]
+  session_id bigint [not null]
+  role chat_role_enum [not null]
+  status chat_message_status_enum [not null, default: 'PENDING']
+  content longtext [not null]
+  needs_clarification boolean [not null, default: false]
+  intent_label varchar(20)
+  references_json json
+  retrieved_doc_ids json
+  guardrail_blocked boolean [not null, default: false]
+  guardrail_reason varchar(200)
+  last_token_seq int [not null, default: 0]
+  prompt_version varchar(50)
+  model_version varchar(50)
+  created_at datetime(6) [not null, default: `CURRENT_TIMESTAMP(6)`]
+  updated_at datetime(6) [not null, default: `CURRENT_TIMESTAMP(6)`]
+
+  Note: 'Chat message log. Stores streaming lifecycle status and last token sequence for partial-response recovery view (without full generation resume), plus reference/audit metadata (REQ-031~042, REQ-039, REQ-117, REQ-123).'
+
+  indexes {
+    (session_id, created_at) [name: 'idx_chat_messages_session_created_at']
+    (session_id, updated_at) [name: 'idx_chat_messages_session_updated_at']
+    (session_id, status) [name: 'idx_chat_messages_session_status']
+    (session_id, guardrail_blocked) [name: 'idx_chat_messages_session_guardrail']
+  }
+}
+
+// ----------------------------------------------------------------------
+// 5) Notification, reminder, and daily schedules
+// ----------------------------------------------------------------------
+Table notifications {
+  id bigint [pk, increment, not null]
+  user_id bigint [not null]
+  type notification_type_enum [not null, default: 'SYSTEM']
+  title varchar(100) [not null]
+  message longtext [not null]
+  payload json
+  is_read boolean [not null, default: false]
+  read_at datetime(6)
+  created_at datetime(6) [not null, default: `CURRENT_TIMESTAMP(6)`]
+
+  Note: 'Notification inbox for list/unread-count/read/read-all APIs (REQ-016~019).'
+
+  indexes {
+    (user_id, is_read) [name: 'idx_notifications_user_is_read']
+    (user_id, created_at) [name: 'idx_notifications_user_created_at']
+  }
+}
+
+Table user_notification_settings {
+  id bigint [pk, increment, not null]
+  user_id bigint [not null, unique]
+  home_schedule_enabled boolean [not null, default: true]
+  meal_alarm_enabled boolean [not null, default: true]
+  medication_alarm_enabled boolean [not null, default: true]
+  exercise_alarm_enabled boolean [not null, default: true]
+  sleep_alarm_enabled boolean [not null, default: true]
+  medication_dday_alarm_enabled boolean [not null, default: true]
+  created_at datetime(6) [not null, default: `CURRENT_TIMESTAMP(6)`]
+  updated_at datetime(6) [not null, default: `CURRENT_TIMESTAMP(6)`]
+
+  Note: 'Per-user notification toggle settings for 6 alarm categories. Supports REQ-066.'
+
+  indexes {
+    (user_id) [name: 'idx_notification_settings_user_id', unique]
+  }
+}
+
+Table medication_reminders {
+  id bigint [pk, increment, not null]
+  user_id bigint [not null]
+  medication_id bigint
+  medication_name varchar(255) [not null]
+  dose_text varchar(100)
+  schedule_times json [not null]
+  start_date date
+  end_date date
+  dispensed_date date
+  total_days int
+  daily_intake_count decimal(6,2)
+  enabled boolean [not null, default: true]
+  created_at datetime(6) [not null, default: `CURRENT_TIMESTAMP(6)`]
+  updated_at datetime(6) [not null, default: `CURRENT_TIMESTAMP(6)`]
+
+  Note: 'Single reminder table for CRUD and medication D-day calculation. dose_text stores formatted dosage (e.g. "1 캡/정"). Optional supply fields support REQ-020, REQ-021, REQ-121 without extra supply tables.'
+
+  indexes {
+    (user_id, enabled) [name: 'idx_reminders_user_enabled']
+    (user_id, medication_name) [name: 'idx_reminders_user_medication_name']
+    (user_id, medication_id) [name: 'idx_reminders_user_medication_id']
+  }
+}
+
+Table schedule_items {
+  id bigint [pk, increment, not null]
+  user_id bigint [not null]
+  reminder_id bigint
+  category schedule_item_category_enum [not null]
+  title varchar(255) [not null]
+  scheduled_at datetime(6) [not null]
+  status schedule_item_status_enum [not null, default: 'PENDING']
+  completed_at datetime(6)
+  created_at datetime(6) [not null, default: `CURRENT_TIMESTAMP(6)`]
+  updated_at datetime(6) [not null, default: `CURRENT_TIMESTAMP(6)`]
+
+  Note: 'Timeline schedule item table for GET /schedules/daily and PATCH /schedules/items/{item_id}/status. Stores per-item completion state for medication/meal/sleep timeline (REQ-010).'
+
+  indexes {
+    (user_id, scheduled_at) [name: 'idx_schedule_items_user_scheduled_at']
+    (user_id, status) [name: 'idx_schedule_items_user_status']
+    (reminder_id) [name: 'idx_schedule_items_reminder_id']
+  }
+}
+
+// ----------------------------------------------------------------------
+// 6) Daily diary
+// ----------------------------------------------------------------------
+Table daily_diaries {
+  id bigint [pk, increment, not null]
+  user_id bigint [not null]
+  date date [not null]
+  content longtext [not null, default: '']
+  created_at datetime(6) [not null, default: `CURRENT_TIMESTAMP(6)`]
+  updated_at datetime(6) [not null, default: `CURRENT_TIMESTAMP(6)`]
+
+  Note: 'Daily journal entries for user diary feature. One diary per user per date. Supports REQ-073.'
+
+  indexes {
+    (user_id, date) [name: 'idx_daily_diaries_user_date', unique]
+  }
+}
+
+// ----------------------------------------------------------------------
+// Relationships
+// ----------------------------------------------------------------------
+Ref: users.id - health_profiles.user_id [delete: cascade]
+Ref: users.id < documents.user_id [delete: cascade]
+Ref: users.id < ocr_jobs.user_id [delete: cascade]
+Ref: documents.id < ocr_jobs.document_id [delete: cascade]
+Ref: users.id < guide_jobs.user_id [delete: cascade]
+Ref: ocr_jobs.id < guide_jobs.ocr_job_id [delete: cascade]
+Ref: guide_jobs.id - guide_results.job_id [delete: cascade]
+Ref: users.id < chat_sessions.user_id [delete: cascade]
+Ref: chat_sessions.id < chat_messages.session_id [delete: cascade]
+Ref: users.id < notifications.user_id [delete: cascade]
+Ref: users.id < medication_reminders.user_id [delete: cascade]
+Ref: medications.id < medication_reminders.medication_id [delete: set null]
+Ref: users.id < schedule_items.user_id [delete: cascade]
+Ref: medication_reminders.id < schedule_items.reminder_id [delete: set null]
+Ref: users.id - user_notification_settings.user_id [delete: cascade]
+Ref: users.id < daily_diaries.user_id [delete: cascade]
