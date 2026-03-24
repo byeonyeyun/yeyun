@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import type { CSSProperties, ReactNode } from "react";
 import type { LucideIcon } from "lucide-react";
 import {
@@ -11,13 +12,17 @@ import {
   Coffee,
   Dumbbell,
   HeartPulse,
+  MessageSquare,
   MoonStar,
   Pill,
   Smartphone,
   Sparkles,
+  Star,
+  ThumbsUp,
   Wine,
   X,
 } from "lucide-react";
+import { toast } from "sonner";
 import {
   guideApi,
   GuideJobResult,
@@ -36,7 +41,7 @@ interface MedicationGuideItem {
   side_effect?: string | null;
   precautions?: string | null;
   side_effects?: string | null;
-  safety_source?: string | null;
+
 }
 
 interface GuideTone {
@@ -172,13 +177,6 @@ function buildGuideBadgeStyle(tone: GuideTone): CSSProperties {
   };
 }
 
-function formatSafetySourceLabel(source: string | null | undefined): string {
-  if (source === "DB") return "drugDB(psych_drugs)";
-  if (source === "EASY_DRUG") return "e약은요";
-  if (source === "LLM") return "LLM";
-  return "미확인";
-}
-
 function extractFirstSentence(text: string): string {
   const trimmed = text.trim();
   if (!trimmed) return "";
@@ -211,7 +209,6 @@ function buildMedicationGuidanceLines(
   const sideEffectsText = med.side_effects ?? medInfo?.side_effects;
   const sideEffectsFromApi = sideEffectsText ? `부작용: ${sideEffectsText}` : "";
   const hasApiInfo = Boolean(precautionsText || sideEffectsText);
-  const sourceLine = `출처: ${formatSafetySourceLabel(med.safety_source ?? medInfo?.source)}`;
   const fallbackSafetyLine = !hasApiInfo
     ? "주의사항/부작용 정보가 없습니다. 복용 중 이상 반응이 있으면 의료진과 상담하세요."
     : "";
@@ -224,7 +221,6 @@ function buildMedicationGuidanceLines(
     precautionsLine,
     sideEffectsFromApi,
     fallbackSafetyLine,
-    sourceLine,
   ].filter(Boolean);
 }
 
@@ -456,7 +452,7 @@ function GuideDetailModal({
           <span>{item.label}</span>
         </div>
         <div className="rounded-[26px] border border-gray-200 bg-gray-50/70 p-5">
-          <p className="text-xl font-bold leading-snug text-gray-800">{item.summary}</p>
+          <p className="text-lg font-bold leading-snug text-gray-800">{item.summary}</p>
           <div className="mt-5">{renderGuideDetailContent(item)}</div>
         </div>
       </div>
@@ -575,7 +571,7 @@ function GuideActionCard({
       </div>
 
       <div className="mt-6">
-        <p className="overflow-hidden text-ellipsis whitespace-nowrap text-xl font-bold leading-snug text-gray-800 md:text-[1.55rem]">
+        <p className="line-clamp-2 text-base font-bold leading-snug text-gray-800 md:text-lg">
           {item.summary}
         </p>
       </div>
@@ -604,6 +600,11 @@ export default function AiGuide() {
   const [confirmedGuideIds, setConfirmedGuideIds] = useState<string[]>([]);
   const [selectedGuideId, setSelectedGuideId] = useState<string | null>(null);
   const [showOverviewModal, setShowOverviewModal] = useState(false);
+  const [feedbackRating, setFeedbackRating] = useState(0);
+  const [feedbackHelpful, setFeedbackHelpful] = useState<boolean | null>(null);
+  const [feedbackComment, setFeedbackComment] = useState("");
+  const [feedbackSubmitted, setFeedbackSubmitted] = useState(false);
+  const [feedbackSubmitting, setFeedbackSubmitting] = useState(false);
   const cancelledRef = useRef(false);
   const todayKey = useMemo(() => getLocalDateKey(), []);
 
@@ -680,6 +681,12 @@ export default function AiGuide() {
       cancelledRef.current = true;
     };
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => {
+    if (result?.job_id && localStorage.getItem(`guide_feedback:${result.job_id}`)) {
+      setFeedbackSubmitted(true);
+    }
+  }, [result?.job_id]);
 
   useEffect(() => {
     if (!result?.medication_guidance) return;
@@ -790,7 +797,7 @@ export default function AiGuide() {
 
   return (
     <>
-      <div className="min-h-full max-w-4xl mx-auto p-4 md:p-8 stagger-children">
+      <div className="min-h-full max-w-4xl mx-auto p-4 pb-8 md:p-8 stagger-children">
         <div className="mb-6">
           <h1 className="text-2xl font-bold text-gray-800">AI 가이드</h1>
           <p className="mt-0.5 text-sm font-medium text-gray-400">복약 및 생활습관 맞춤 가이드</p>
@@ -873,7 +880,7 @@ export default function AiGuide() {
                   type="button"
                   onClick={() => setShowOverviewModal(true)}
                   disabled={isOverviewDisabled}
-                  className="inline-flex items-center gap-2 self-start rounded-full border border-white/15 bg-white/10 px-4 py-2 text-sm font-semibold text-white transition-colors hover:bg-white/15 disabled:cursor-not-allowed disabled:opacity-50"
+                  className="inline-flex items-center gap-2 self-start rounded-full border border-white/30 bg-white/20 px-5 py-2.5 text-sm font-bold text-white shadow-sm transition-all hover:bg-white/30 hover:shadow-md active:scale-95 disabled:cursor-not-allowed disabled:opacity-50"
                 >
                   <span>전체 가이드 보기</span>
                   <ChevronRight className="h-4 w-4" />
@@ -917,25 +924,134 @@ export default function AiGuide() {
                 </div>
               )}
             </section>
+
+            {/* 피드백 섹션 */}
+            {result && !feedbackSubmitted && (
+              <section className="mt-6 rounded-2xl border border-gray-200 bg-white p-5 shadow-sm">
+                <h3 className="mb-3 flex items-center gap-2 text-sm font-bold text-gray-700">
+                  <MessageSquare className="h-4 w-4" />
+                  가이드가 도움이 되었나요?
+                </h3>
+
+                {/* 별점 */}
+                <div className="mb-3 flex items-center gap-1">
+                  {[1, 2, 3, 4, 5].map((n) => (
+                    <button
+                      key={n}
+                      type="button"
+                      onClick={() => setFeedbackRating(n)}
+                      className="p-0.5 transition-transform hover:scale-110"
+                    >
+                      <Star
+                        className={`h-6 w-6 ${n <= feedbackRating ? "fill-amber-400 text-amber-400" : "text-gray-300"}`}
+                      />
+                    </button>
+                  ))}
+                  {feedbackRating > 0 && (
+                    <span className="ml-2 text-xs text-gray-500">{feedbackRating}점</span>
+                  )}
+                </div>
+
+                {/* 도움됨 버튼 */}
+                <div className="mb-3 flex gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setFeedbackHelpful(true)}
+                    className={`flex items-center gap-1.5 rounded-xl px-4 py-2 text-xs font-semibold transition-colors ${
+                      feedbackHelpful === true
+                        ? "bg-green-100 text-green-700 ring-1 ring-green-300"
+                        : "bg-gray-100 text-gray-500 hover:bg-gray-200"
+                    }`}
+                  >
+                    <ThumbsUp className="h-3.5 w-3.5" />
+                    도움됨
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setFeedbackHelpful(false)}
+                    className={`flex items-center gap-1.5 rounded-xl px-4 py-2 text-xs font-semibold transition-colors ${
+                      feedbackHelpful === false
+                        ? "bg-red-100 text-red-700 ring-1 ring-red-300"
+                        : "bg-gray-100 text-gray-500 hover:bg-gray-200"
+                    }`}
+                  >
+                    <ThumbsUp className="h-3.5 w-3.5 rotate-180" />
+                    아쉬움
+                  </button>
+                </div>
+
+                {/* 코멘트 */}
+                <textarea
+                  value={feedbackComment}
+                  onChange={(e) => setFeedbackComment(e.target.value)}
+                  placeholder="추가 의견이 있다면 적어주세요 (선택)"
+                  maxLength={1000}
+                  rows={2}
+                  className="mb-3 w-full rounded-xl border border-gray-200 bg-gray-50/70 px-3 py-2 text-sm text-gray-700 placeholder:text-gray-400 focus:border-green-300 focus:outline-none focus:ring-2 focus:ring-green-400/30"
+                />
+
+                {/* 제출 */}
+                <button
+                  type="button"
+                  disabled={feedbackRating === 0 || feedbackHelpful === null || feedbackSubmitting}
+                  onClick={async () => {
+                    if (!result || feedbackRating === 0 || feedbackHelpful === null) return;
+                    setFeedbackSubmitting(true);
+                    try {
+                      await guideApi.submitFeedback(result.job_id, {
+                        rating: feedbackRating,
+                        is_helpful: feedbackHelpful,
+                        comment: feedbackComment || undefined,
+                      });
+                      setFeedbackSubmitted(true);
+                      localStorage.setItem(`guide_feedback:${result.job_id}`, "1");
+                    } catch (err) {
+                      const msg = err instanceof Error ? err.message : String(err);
+                      if (msg.includes("STATE_CONFLICT") || msg.includes("이미")) {
+                        setFeedbackSubmitted(true);
+                        localStorage.setItem(`guide_feedback:${result.job_id}`, "1");
+                      } else {
+                        toast.error("피드백 전송에 실패했습니다. 다시 시도해주세요.");
+                      }
+                    } finally {
+                      setFeedbackSubmitting(false);
+                    }
+                  }}
+                  className="gradient-primary w-full rounded-xl py-2.5 text-sm font-bold text-white shadow-sm transition-opacity disabled:opacity-50"
+                >
+                  {feedbackSubmitting ? "전송 중..." : "피드백 보내기"}
+                </button>
+              </section>
+            )}
+
+            {feedbackSubmitted && (
+              <section className="mt-6 rounded-2xl border border-green-200 bg-green-50 p-5 text-center shadow-sm">
+                <CheckCircle2 className="mx-auto mb-2 h-8 w-8 text-green-500" />
+                <p className="text-sm font-semibold text-green-700">피드백을 보내주셔서 감사합니다!</p>
+                <p className="mt-1 text-xs text-green-600">보내주신 의견은 가이드 품질 개선에 활용됩니다.</p>
+              </section>
+            )}
           </div>
         )}
       </div>
 
-      {selectedGuide ? (
+      {selectedGuide ? createPortal(
         <GuideDetailModal
           item={selectedGuide}
           onClose={() => setSelectedGuideId(null)}
-        />
+        />,
+        document.body,
       ) : null}
 
-      {showOverviewModal && result ? (
+      {showOverviewModal && result ? createPortal(
         <GuideOverviewModal
           items={guideItems}
           updatedAt={updatedAt}
           references={result.source_references ?? []}
           safetyNotice={safetyNotice}
           onClose={() => setShowOverviewModal(false)}
-        />
+        />,
+        document.body,
       ) : null}
     </>
   );
